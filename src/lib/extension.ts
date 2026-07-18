@@ -11,17 +11,17 @@ import { applyPlaylistContext, ensureTrackMetadata, getTrackCache } from "./meta
 import {
   canReorderPlaylist,
   clearOriginalOrder,
-  getUidOrder,
+  getUriOrder,
   isReorderablePlaylist,
   loadOriginalOrder,
-  orderItemsByUids,
+  orderItemsByUris,
   reorderPlaylistByUids,
   settleAfterMove,
   snapshotOriginalOrder,
   sortPlaylistItems,
   type CanReorderResult,
   type PlaylistTrackItem,
-  uidsMatchOrder,
+  urisMatchOrder,
   verifyPlaylistOrderWithRetry,
 } from "./playlist-sort";
 import { getSettings, saveSettings } from "./settings";
@@ -115,19 +115,19 @@ export class PlaylistColumnsExtension {
     return true;
   }
 
-  private async finishReorder(uri: string, targetUids: string[]) {
-    logSortTrace("finish.start", { uri, targetLen: targetUids.length });
+  private async finishReorder(uri: string, targetUris: string[]) {
+    logSortTrace("finish.start", { uri, targetLen: targetUris.length });
     await settleAfterMove();
-    const verified = await verifyPlaylistOrderWithRetry(uri, targetUids, { attempts: 3, delayMs: 300 });
+    const verified = await verifyPlaylistOrderWithRetry(uri, targetUris, { attempts: 3, delayMs: 300 });
     if (!verified) {
-      logSortTrace("finish.failed", { uri, targetUids: summarizeUidOrder(targetUids) });
+      logSortTrace("finish.failed", { uri, targetUris: summarizeUidOrder(targetUris) });
       exportSortTrace({ auto: true, reason: "verify_failed" });
       Spicetify.showNotification(
         "Playlist Columns: sort did not stick — trace saved (see sort-debug.trace.jsonl)",
         true,
         6000
       );
-      debugLog("verify failed: UID order mismatch after move");
+      debugLog("verify failed: URI order mismatch after replace");
       return false;
     }
 
@@ -194,17 +194,17 @@ export class PlaylistColumnsExtension {
 
       if (!column) {
         const items = await this.getFreshPlaylistTracks(uri);
-        const originalUids = loadOriginalOrder(uri);
-        if (originalUids?.length) {
-          const restored = orderItemsByUids(items, originalUids);
-          if (!uidsMatchOrder(items, originalUids)) {
+        const originalUris = loadOriginalOrder(uri);
+        if (originalUris?.length) {
+          const restored = orderItemsByUris(items, originalUris);
+          if (!urisMatchOrder(items, originalUris)) {
             if (this.blockSortIfNotEditable(uri, reorderCheck, true)) return;
             Spicetify.showNotification("Restoring playlist order…", false, 3000);
             await reorderPlaylistByUids(uri, restored);
             saveSortForUri(uri, null);
             clearOriginalOrder(uri);
             this.currentSort = null;
-            await this.finishReorder(uri, originalUids);
+            await this.finishReorder(uri, originalUris);
             return;
           }
         }
@@ -231,18 +231,18 @@ export class PlaylistColumnsExtension {
 
       const cache = getTrackCache();
       const sorted = sortPlaylistItems(items, column, dir, (meta, col, item) => this.getSortValue(meta, col, item), cache);
-      const sortedUids = getUidOrder(sorted);
+      const sortedUris = getUriOrder(sorted);
 
       logSortTrace("applySort.sorted", {
         uri,
         column,
         direction: dir,
         itemCount: items.length,
-        beforeUids: summarizeUidOrder(getUidOrder(items)),
-        targetUids: summarizeUidOrder(sortedUids),
+        beforeUris: summarizeUidOrder(getUriOrder(items)),
+        targetUris: summarizeUidOrder(sortedUris),
       });
 
-      if (uidsMatchOrder(items, sortedUids)) {
+      if (urisMatchOrder(items, sortedUris)) {
         debugLog(`sort ${column} ${dir}: order already matches`);
         this.updateSortPill();
         this.updateHeaderSortIndicatorsOnAll();
@@ -251,7 +251,7 @@ export class PlaylistColumnsExtension {
 
       Spicetify.showNotification(opts?.syncOnly ? "Applying saved sort…" : "Sorting playlist…", false, 3000);
       await reorderPlaylistByUids(uri, sorted);
-      await this.finishReorder(uri, sortedUids);
+      await this.finishReorder(uri, sortedUris);
     } catch (e) {
       logSortTrace("applySort.error", { error: String(e) });
       exportSortTrace({ auto: true, reason: "exception" });

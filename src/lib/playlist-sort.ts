@@ -8,9 +8,7 @@ export interface PlaylistTrackItem {
   addedAt?: string;
 }
 
-const ORIGINAL_ORDER_PREFIX = "ptc:original-order:";
-
-type MovePosition = { before?: "start" | { uid: string }; after?: "end" | { uid: string } };
+const ORIGINAL_ORDER_PREFIX = "ptc:original-uris:";
 
 export type CanReorderReason = "ok" | "editorial" | "no_edit_permission" | "metadata_error" | "not_playlist";
 
@@ -86,9 +84,9 @@ export function getOriginalOrderStorageKey(uri: string) {
 export function snapshotOriginalOrder(uri: string, items: PlaylistTrackItem[]) {
   const key = getOriginalOrderStorageKey(uri);
   if (sessionStorage.getItem(key)) return;
-  const uids = getUidOrder(items);
-  if (!uids.length) return;
-  sessionStorage.setItem(key, JSON.stringify(uids));
+  const uris = getUriOrder(items);
+  if (!uris.length) return;
+  sessionStorage.setItem(key, JSON.stringify(uris));
 }
 
 export function loadOriginalOrder(uri: string): string[] | null {
@@ -108,10 +106,20 @@ export function getUidOrder(items: PlaylistTrackItem[]): string[] {
   return items.map((i) => i.uid).filter((u): u is string => Boolean(u));
 }
 
+export function getUriOrder(items: PlaylistTrackItem[]): string[] {
+  return items.map((i) => i.uri).filter((u): u is string => Boolean(u));
+}
+
 export function uidsMatchOrder(items: PlaylistTrackItem[], targetUids: string[]) {
   const current = getUidOrder(items);
   if (current.length !== targetUids.length) return false;
   return current.every((uid, i) => uid === targetUids[i]);
+}
+
+export function urisMatchOrder(items: PlaylistTrackItem[], targetUris: string[]) {
+  const current = getUriOrder(items);
+  if (current.length !== targetUris.length) return false;
+  return current.every((uri, i) => uri === targetUris[i]);
 }
 
 export function orderItemsByUids(items: PlaylistTrackItem[], uids: string[]): PlaylistTrackItem[] {
@@ -134,61 +142,117 @@ export function orderItemsByUids(items: PlaylistTrackItem[], uids: string[]): Pl
   return ordered;
 }
 
-async function movePlaylistItem(playlistUri: string, item: PlaylistTrackItem, position: MovePosition) {
-  if (!item.uid || !item.uri) throw new Error("missing uid or uri for move");
-  const t0 = Date.now();
-  await Spicetify.Platform.PlaylistAPI.move(playlistUri, [{ uri: item.uri, uid: item.uid }], position);
-  const durationMs = Date.now() - t0;
-  logSortTrace("move.item.ok", { uid: item.uid, durationMs });
-  if (durationMs < 5) {
-    logSortTrace("move.item.suspicious_fast", { uid: item.uid, durationMs });
+export function orderItemsByUris(items: PlaylistTrackItem[], uris: string[]): PlaylistTrackItem[] {
+  const byUri = new Map<string, PlaylistTrackItem[]>();
+  for (const item of items) {
+    if (!item.uri) continue;
+    const list = byUri.get(item.uri) || [];
+    list.push(item);
+    byUri.set(item.uri, list);
   }
+
+  const ordered: PlaylistTrackItem[] = [];
+  for (const uri of uris) {
+    const list = byUri.get(uri);
+    if (list?.length) ordered.push(list.shift()!);
+  }
+  for (const list of byUri.values()) ordered.push(...list);
+  return ordered;
 }
 
+const ADD_BATCH_SIZE = 100;
+
+async function clearPlaylistContents(playlistUri: string, current: PlaylistTrackItem[]) {
+  const api = Spicetify.Platform.PlaylistAPI as {
+    clear?: (uri: string) => Promise<void>;
+    remove?: (uri: string, rows: { uri: string; uid: string }[]) => Promise<void>;
+  };
+
+  logSortTrace("reorder.clear.start", { playlistUri, trackCount: current.length });
+  const t0 = Date.now();
+
+  if (typeof api.clear === "function") {
+    await api.clear(playlistUri);
+    logSortTrace("reorder.clear.ok", { method: "clear", durationMs: Date.now() - t0 });
+    return;
+  }
+
+  if (typeof api.remove !== "function") {
+    throw new Error("PlaylistAPI.clear/remove unavailable");
+  }
+
+  const rows = current
+    .filter((i) => i.uid && i.uri)
+    .map((i) => ({ uri: i.uri!, uid: i.uid! }));
+  if (!rows.length) {
+    logSortTrace("reorder.clear.ok", { method: "noop", durationMs: Date.now() - t0 });
+    return;
+  }
+
+  for (let i = 0; i < rows.length; i += ADD_BATCH_SIZE) {
+    await api.remove(playlistUri, rows.slice(i, i + ADD_BATCH_SIZE));
+  }
+  logSortTrace("reorder.clear.ok", { method: "remove", rowCount: rows.length, durationMs: Date.now() - t0 });
+}
+
+async function addPlaylistTracks(playlistUri: string, trackUris: string[]) {
+  const api = Spicetify.Platform.PlaylistAPI as {
+    add: (uri: string, uris: string[], position?: { after?: string }) => Promise<void>;
+  };
+
+  logSortTrace("reorder.add.start", { playlistUri, trackCount: trackUris.length });
+  const t0 = Date.now();
+  for (let i = 0; i < trackUris.length; i += ADD_BATCH_SIZE) {
+    const batch = trackUris.slice(i, i + ADD_BATCH_SIZE);
+    await api.add(playlistUri, batch, { after: "end" });
+    logSortTrace("reorder.add.batch", { offset: i, batchSize: batch.length });
+  }
+  logSortTrace("reorder.add.ok", { trackCount: trackUris.length, durationMs: Date.now() - t0 });
+}
+
+/** Reorder by clearing playlist contents and re-adding tracks in target order (new UIDs). */
 export async function reorderPlaylistByUids(playlistUri: string, sortedItems: PlaylistTrackItem[]) {
-  const movable = sortedItems.filter((i) => i.uid && i.uri);
+  const movable = sortedItems.filter((i) => i.uri);
   if (movable.length < 2) {
     logSortTrace("reorder.skip", { reason: "too_few_tracks", count: movable.length });
     return;
   }
 
-  const targetUids = getUidOrder(movable);
+  const targetUris = getUriOrder(movable);
   const current = await fetchPlaylistItems(playlistUri);
-  const currentUids = getUidOrder(current);
+  const currentUris = getUriOrder(current);
   logSortTrace("reorder.preflight", {
     playlistUri,
     trackCount: movable.length,
-    currentUids: summarizeUidOrder(currentUids),
-    targetUids: summarizeUidOrder(targetUids),
-    matches: uidsMatchOrder(current, targetUids),
+    currentUris: summarizeUidOrder(currentUris),
+    targetUris: summarizeUidOrder(targetUris),
+    matches: urisMatchOrder(current, targetUris),
   });
 
-  if (uidsMatchOrder(current, targetUids)) {
+  if (urisMatchOrder(current, targetUris)) {
     debugLog("reorder skipped: order already matches");
     logSortTrace("reorder.skip", { reason: "already_matches" });
     return;
   }
 
-  logSortTrace("reorder.seq.start", { trackCount: movable.length });
+  logSortTrace("reorder.replace.start", { trackCount: movable.length });
   const moveT0 = Date.now();
 
-  for (let i = movable.length - 1; i >= 0; i--) {
-    await movePlaylistItem(playlistUri, movable[i], { before: "start" });
-  }
+  await clearPlaylistContents(playlistUri, current);
+  await addPlaylistTracks(playlistUri, targetUris);
 
   const moveDurationMs = Date.now() - moveT0;
   const postItems = await fetchPlaylistItems(playlistUri);
-  const postUids = getUidOrder(postItems);
-  const movedCount = movable.length;
+  const postUris = getUriOrder(postItems);
   logSortTrace("reorder.post_move", {
     playlistUri,
     moveDurationMs,
-    movedCount,
-    ...mismatchInfo(postUids, targetUids),
+    movedCount: movable.length,
+    ...mismatchInfo(postUris, targetUris),
   });
 
-  debugLog(`reordered ${movedCount}/${movable.length} tracks via sequential insert before:start`);
-  logSortTrace("reorder.seq.done", { trackCount: movable.length, movedCount, moveDurationMs });
+  debugLog(`reordered ${movable.length} tracks via clear+re-add`);
+  logSortTrace("reorder.replace.done", { trackCount: movable.length, moveDurationMs });
 }
 
 export const MOVE_SETTLE_MS = 400;
@@ -203,14 +267,14 @@ export async function fetchPlaylistItems(playlistUri: string): Promise<PlaylistT
   return items.filter((i) => i.uri?.startsWith("spotify:track:") || i.uri?.startsWith("spotify:local:"));
 }
 
-export async function verifyPlaylistOrder(playlistUri: string, targetUids: string[]) {
+export async function verifyPlaylistOrder(playlistUri: string, targetUris: string[]) {
   const items = await fetchPlaylistItems(playlistUri);
-  const currentUids = getUidOrder(items);
-  const ok = uidsMatchOrder(items, targetUids);
+  const currentUris = getUriOrder(items);
+  const ok = urisMatchOrder(items, targetUris);
   if (!ok) {
     logSortTrace("verify.mismatch", {
       playlistUri,
-      ...mismatchInfo(currentUids, targetUids),
+      ...mismatchInfo(currentUris, targetUris),
     });
   }
   return ok;
@@ -218,22 +282,22 @@ export async function verifyPlaylistOrder(playlistUri: string, targetUids: strin
 
 export async function verifyPlaylistOrderWithRetry(
   playlistUri: string,
-  targetUids: string[],
+  targetUris: string[],
   opts?: { attempts?: number; delayMs?: number }
 ) {
   const attempts = opts?.attempts ?? 3;
   const delayMs = opts?.delayMs ?? 300;
 
-  logSortTrace("verify.start", { playlistUri, attempts, delayMs, targetLen: targetUids.length });
+  logSortTrace("verify.start", { playlistUri, attempts, delayMs, targetLen: targetUris.length });
 
   for (let i = 0; i < attempts; i++) {
     const items = await fetchPlaylistItems(playlistUri);
-    const currentUids = getUidOrder(items);
-    const ok = uidsMatchOrder(items, targetUids);
+    const currentUris = getUriOrder(items);
+    const ok = urisMatchOrder(items, targetUris);
     logSortTrace("verify.attempt", {
       attempt: i + 1,
       ok,
-      ...mismatchInfo(currentUids, targetUids),
+      ...mismatchInfo(currentUris, targetUris),
     });
     if (ok) {
       logSortTrace("verify.ok", { attempt: i + 1 });

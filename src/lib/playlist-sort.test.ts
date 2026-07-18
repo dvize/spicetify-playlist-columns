@@ -142,90 +142,77 @@ describe("canReorderPlaylist", () => {
 });
 
 describe("reorderPlaylistByUids", () => {
-  const move = vi.fn();
+  const clear = vi.fn();
+  const remove = vi.fn();
+  const add = vi.fn();
   const getContents = vi.fn();
 
   beforeEach(() => {
-    move.mockReset().mockResolvedValue(undefined);
+    clear.mockReset().mockResolvedValue(undefined);
+    remove.mockReset().mockResolvedValue(undefined);
+    add.mockReset().mockResolvedValue(undefined);
     getContents.mockReset();
     (globalThis as { Spicetify?: Record<string, unknown> }).Spicetify = {
       Platform: {
-        PlaylistAPI: { move, getContents },
+        PlaylistAPI: { clear, remove, add, getContents },
       },
       URI: { isPlaylistV1OrV2: () => true },
     };
   });
 
-  it("calls move once per track in reverse order before start when order differs", async () => {
+  it("clears then re-adds tracks in target order when order differs", async () => {
     const sorted: PlaylistTrackItem[] = [
       item("u1", "spotify:track:1"),
       item("u2", "spotify:track:2"),
       item("u3", "spotify:track:3"),
     ];
-    getContents.mockResolvedValue({
-      items: [sorted[2], sorted[0], sorted[1]],
-    });
+    getContents
+      .mockResolvedValueOnce({ items: [sorted[2], sorted[0], sorted[1]] })
+      .mockResolvedValueOnce({ items: sorted });
 
     await reorderPlaylistByUids(PLAYLIST_URI, sorted);
 
-    expect(move).toHaveBeenCalledTimes(3);
+    expect(clear).toHaveBeenCalledTimes(1);
+    expect(clear).toHaveBeenCalledWith(PLAYLIST_URI);
+    expect(remove).not.toHaveBeenCalled();
+    expect(add).toHaveBeenCalledTimes(1);
+    expect(add).toHaveBeenCalledWith(
+      PLAYLIST_URI,
+      ["spotify:track:1", "spotify:track:2", "spotify:track:3"],
+      { after: "end" }
+    );
     expect(getContents).toHaveBeenCalledTimes(2);
-    expect(move).toHaveBeenNthCalledWith(
-      1,
-      PLAYLIST_URI,
-      [{ uri: "spotify:track:3", uid: "u3" }],
-      { before: "start" }
-    );
-    expect(move).toHaveBeenNthCalledWith(
-      2,
-      PLAYLIST_URI,
-      [{ uri: "spotify:track:2", uid: "u2" }],
-      { before: "start" }
-    );
-    expect(move).toHaveBeenNthCalledWith(
-      3,
-      PLAYLIST_URI,
-      [{ uri: "spotify:track:1", uid: "u1" }],
-      { before: "start" }
-    );
   });
 
-  it("still moves every track when a mid-list UID already matches its target index", async () => {
+  it("falls back to remove when clear is unavailable", async () => {
     const sorted: PlaylistTrackItem[] = [
       item("u1", "spotify:track:1"),
       item("u2", "spotify:track:2"),
-      item("u3", "spotify:track:3"),
     ];
-    // u2 is already at index 1 in both current and target — old skip logic wrongly skipped it
-    getContents.mockResolvedValue({
-      items: [sorted[2], sorted[1], sorted[0]],
-    });
+    (globalThis as { Spicetify?: Record<string, unknown> }).Spicetify = {
+      Platform: {
+        PlaylistAPI: { remove, add, getContents },
+      },
+      URI: { isPlaylistV1OrV2: () => true },
+    };
+    getContents
+      .mockResolvedValueOnce({ items: [sorted[1], sorted[0]] })
+      .mockResolvedValueOnce({ items: sorted });
 
     await reorderPlaylistByUids(PLAYLIST_URI, sorted);
 
-    expect(move).toHaveBeenCalledTimes(3);
-    expect(getContents).toHaveBeenCalledTimes(2);
-    expect(move).toHaveBeenNthCalledWith(
-      1,
+    expect(remove).toHaveBeenCalledWith(PLAYLIST_URI, [
+      { uri: "spotify:track:2", uid: "u2" },
+      { uri: "spotify:track:1", uid: "u1" },
+    ]);
+    expect(add).toHaveBeenCalledWith(
       PLAYLIST_URI,
-      [{ uri: "spotify:track:3", uid: "u3" }],
-      { before: "start" }
-    );
-    expect(move).toHaveBeenNthCalledWith(
-      2,
-      PLAYLIST_URI,
-      [{ uri: "spotify:track:2", uid: "u2" }],
-      { before: "start" }
-    );
-    expect(move).toHaveBeenNthCalledWith(
-      3,
-      PLAYLIST_URI,
-      [{ uri: "spotify:track:1", uid: "u1" }],
-      { before: "start" }
+      ["spotify:track:1", "spotify:track:2"],
+      { after: "end" }
     );
   });
 
-  it("skips move when playlist already matches target order", async () => {
+  it("skips replace when playlist already matches target URI order", async () => {
     const sorted: PlaylistTrackItem[] = [
       item("u1", "spotify:track:1"),
       item("u2", "spotify:track:2"),
@@ -234,6 +221,7 @@ describe("reorderPlaylistByUids", () => {
 
     await reorderPlaylistByUids(PLAYLIST_URI, sorted);
 
-    expect(move).not.toHaveBeenCalled();
+    expect(clear).not.toHaveBeenCalled();
+    expect(add).not.toHaveBeenCalled();
   });
 });
