@@ -1,0 +1,25 @@
+{
+  "name": "playlist-columns",
+  "version": "1.1.0",
+  "private": true,
+  "scripts": {
+    "build": "spicetify-creator",
+    "build-local": "spicetify-creator --out=dist --minify",
+    "watch": "spicetify-creator --watch",
+    "test": "vitest run",
+    "sort-log": "node scripts/sort-log-runner.mjs"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "spicetify-creator": "^1.0.17",
+    "typescript": "^5.4.0",
+    "vitest": "^3.2.4"
+  },
+  "allowScripts": {
+    "@parcel/watcher@2.5.6": true,
+    "esbuild@0.14.54": true
+  }
+}
+

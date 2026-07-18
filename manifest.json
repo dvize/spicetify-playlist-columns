@@ -1,0 +1,11 @@
+[
+  {
+    "name": "Playlist Columns",
+    "description": "Configurable playlist columns with genre, popularity, and plays. Click headers to sort in realtime without modifying playlists.",
+    "preview": "assets/preview.png",
+    "main": "playlist-columns-loader.mjs",
+    "readme": "README.md",
+    "authors": [{ "name": "dvize" }],
+    "tags": ["column", "sort", "genre", "popularity", "playlist", "metadata"]
+  }
+]

@@ -1,0 +1,6 @@
+node_modules/
+# dist/ is committed for Marketplace installs via loader
+sort-debug*.json
+sort-debug*.jsonl
+*.trace.jsonl
+
