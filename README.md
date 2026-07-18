@@ -4,7 +4,11 @@ A [Spicetify](https://spicetify.app/) extension that adds **Genre**, **Popularit
 
 **Sorting owned playlists rewrites track order** (clear + re-add via Spotify’s internal API). Order persists after you leave the playlist. **Date added** is reset for those tracks. Spotify **editorial** playlists (`37i9dQZF1…`) cannot be reordered and show a clear message instead.
 
-![Preview](assets/preview.png)
+## Example
+
+Playlist view with **DJ** (key + BPM), **Genre**, **Popularity**, and **Plays** columns:
+
+![Example: New Dance Pop playlist with custom columns](assets/example.png)
 
 ## Features
 

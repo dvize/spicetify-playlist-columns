@@ -2,7 +2,7 @@
   {
     "name": "Playlist Columns",
     "description": "Genre, popularity, and plays columns for playlists. Sort owned playlists in place (persists; resets date added). Editorial playlists not supported.",
-    "preview": "assets/preview.png",
+    "preview": "assets/example.png",
     "main": "playlist-columns-loader.mjs",
     "readme": "README.md",
     "authors": [{ "name": "dvize" }],
